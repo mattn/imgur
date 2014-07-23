@@ -5,10 +5,10 @@ import (
 	"encoding/base64"
 	"encoding/gob"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,6 +20,10 @@ import (
 
 	"code.google.com/p/goauth2/oauth"
 	"github.com/mattn/go-scan"
+)
+
+const (
+	endpoint = "https://api.imgur.com/3/image"
 )
 
 // oauth configuration
@@ -111,28 +115,28 @@ func tokenFromWeb(config *oauth.Config) (*oauth.Token, error) {
 		"client_id":     {config.ClientId},
 		"client_secret": {config.ClientSecret},
 	}
-	r, err := http.DefaultClient.Post(
+	res, err := http.DefaultClient.Post(
 		config.TokenURL,
 		"application/x-www-form-urlencoded", strings.NewReader(v.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("Token exchange error: %v", err)
 	}
-	defer r.Body.Close()
+	defer res.Body.Close()
 
-	var res struct {
+	var result struct {
 		Access    string        `json:"access_token"`
 		Refresh   string        `json:"refresh_token"`
 		ExpiresIn time.Duration `json:"expires_in"`
 		Id        string        `json:"id_token"`
 	}
-	if err = json.NewDecoder(r.Body).Decode(&res); err != nil {
+	if err = json.NewDecoder(res.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("Token exchange error: %v", err)
 	}
 
 	return &oauth.Token{
-		AccessToken:  res.Access,
-		RefreshToken: res.Refresh,
-		Expiry:       time.Now().Add(res.ExpiresIn),
+		AccessToken:  result.Access,
+		RefreshToken: result.Refresh,
+		Expiry:       time.Now().Add(result.ExpiresIn),
 	}, nil
 }
 
@@ -158,48 +162,68 @@ func openUrl(u string) error {
 	return nil
 }
 
-func valueOrFileContents(value string, filename string) string {
-	if value != "" {
-		return value
-	}
-	slurp, err := ioutil.ReadFile(filename)
-	if err != nil {
-		log.Fatalf("Error reading %q: %v", filename, err)
-	}
-	return strings.TrimSpace(string(slurp))
-}
+var anonymous = flag.Bool("a", false, "Post as anonymous")
 
 func main() {
-	b, err := ioutil.ReadFile(os.Args[1])
-	if err != nil {
-		log.Fatal(err)
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage of imgur [-a] [file]`)
+		flag.PrintDefaults()
 	}
-	params := url.Values{"image": {base64.StdEncoding.EncodeToString(b)}}
-
-	client, err := getOAuthClient(config)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "auth:", err.Error())
+	flag.Parse()
+	if flag.NArg() == 0 {
+		flag.Usage()
 		os.Exit(1)
 	}
 
-	r, err := client.PostForm("https://api.imgur.com/3/image", params)
+	b, err := ioutil.ReadFile(flag.Arg(0))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open:", err.Error())
 		os.Exit(1)
 	}
-	if r.StatusCode != 200 {
-		var message string
-		err = scan.ScanJSON(r.Body, "data/error", &message)
+	params := url.Values{"image": {base64.StdEncoding.EncodeToString(b)}}
+
+	var res *http.Response
+
+	if *anonymous {
+		req, err := http.NewRequest("POST", endpoint, strings.NewReader(params.Encode()))
 		if err != nil {
-			message = r.Status
+			fmt.Fprintln(os.Stderr, "post:", err.Error())
+			os.Exit(1)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Authorization", "Client-ID "+config.ClientId)
+
+		res, err = http.DefaultClient.Do(req)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "post:", err.Error())
+			os.Exit(1)
+		}
+	} else {
+		client, err := getOAuthClient(config)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "auth:", err.Error())
+			os.Exit(1)
+		}
+
+		res, err = client.PostForm(endpoint, params)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "post:", err.Error())
+			os.Exit(1)
+		}
+	}
+	if res.StatusCode != 200 {
+		var message string
+		err = scan.ScanJSON(res.Body, "data/error", &message)
+		if err != nil {
+			message = res.Status
 		}
 		fmt.Fprintln(os.Stderr, "post:", message)
 		os.Exit(1)
 	}
-	defer r.Body.Close()
+	defer res.Body.Close()
 
 	var link string
-	err = scan.ScanJSON(r.Body, "data/link", &link)
+	err = scan.ScanJSON(res.Body, "data/link", &link)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "post:", err.Error())
 		os.Exit(1)
