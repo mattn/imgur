@@ -18,8 +18,9 @@ import (
 	"strings"
 	"time"
 
-	"code.google.com/p/goauth2/oauth"
 	"github.com/mattn/go-scan"
+	"golang.org/x/net/context"
+	"golang.org/x/oauth2"
 )
 
 const (
@@ -27,11 +28,13 @@ const (
 )
 
 // oauth configuration
-var config = &oauth.Config{
-	ClientId:     "16958ad0bd36ae8",
+var config = &oauth2.Config{
+	ClientID:     "16958ad0bd36ae8",
 	ClientSecret: "40f37038e13285da76657c73a22d9840b9dae393",
-	AuthURL:      "https://api.imgur.com/oauth2/authorize",
-	TokenURL:     "https://api.imgur.com/oauth2/token",
+	Endpoint: oauth2.Endpoint{
+		AuthURL:  "https://api.imgur.com/oauth2/authorize",
+		TokenURL: "https://api.imgur.com/oauth2/token",
+	},
 }
 
 func osUserCacheDir() string {
@@ -42,26 +45,26 @@ func osUserCacheDir() string {
 	return filepath.Join(home, ".cache")
 }
 
-func tokenCacheFile(config *oauth.Config) string {
+func tokenCacheFile(config *oauth2.Config) string {
 	hash := fnv.New32a()
-	hash.Write([]byte(config.ClientId))
+	hash.Write([]byte(config.ClientID))
 	hash.Write([]byte(config.ClientSecret))
-	hash.Write([]byte(config.Scope))
+	hash.Write([]byte(strings.Join(config.Scopes, ",")))
 	fn := fmt.Sprintf("imgur-api-tok%v", hash.Sum32())
 	return filepath.Join(osUserCacheDir(), url.QueryEscape(fn))
 }
 
-func tokenFromFile(file string) (*oauth.Token, error) {
+func tokenFromFile(file string) (*oauth2.Token, error) {
 	f, err := os.Open(file)
 	if err != nil {
 		return nil, err
 	}
-	t := new(oauth.Token)
+	t := new(oauth2.Token)
 	err = gob.NewDecoder(f).Decode(t)
 	return t, err
 }
 
-func saveToken(file string, token *oauth.Token) error {
+func saveToken(file string, token *oauth2.Token) error {
 	f, err := os.Create(file)
 	if err != nil {
 		return fmt.Errorf("Warning: failed to cache oauth token: %v", err)
@@ -70,7 +73,7 @@ func saveToken(file string, token *oauth.Token) error {
 	return gob.NewEncoder(f).Encode(token)
 }
 
-func getOAuthClient(config *oauth.Config) (*http.Client, error) {
+func getOAuthClient(config *oauth2.Config) (*http.Client, error) {
 	cacheFile := tokenCacheFile(config)
 	token, err := tokenFromFile(cacheFile)
 	if err != nil {
@@ -82,14 +85,10 @@ func getOAuthClient(config *oauth.Config) (*http.Client, error) {
 		}
 	}
 
-	return (&oauth.Transport{
-		Token:     token,
-		Config:    config,
-		Transport: http.DefaultTransport,
-	}).Client(), nil
+	return config.Client(context.Background(), token), nil
 }
 
-func tokenFromWeb(config *oauth.Config) (*oauth.Token, error) {
+func tokenFromWeb(config *oauth2.Config) (*oauth2.Token, error) {
 	config.RedirectURL = ""
 	authUrl := config.AuthCodeURL("")
 	u2, err := url.Parse(authUrl)
@@ -112,11 +111,11 @@ func tokenFromWeb(config *oauth.Config) (*oauth.Token, error) {
 	v = url.Values{
 		"grant_type":    {"pin"},
 		"pin":           {strings.TrimSpace(string(b))},
-		"client_id":     {config.ClientId},
+		"client_id":     {config.ClientID},
 		"client_secret": {config.ClientSecret},
 	}
 	res, err := http.DefaultClient.Post(
-		config.TokenURL,
+		config.Endpoint.TokenURL,
 		"application/x-www-form-urlencoded", strings.NewReader(v.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("Token exchange error: %v", err)
@@ -133,7 +132,7 @@ func tokenFromWeb(config *oauth.Config) (*oauth.Token, error) {
 		return nil, fmt.Errorf("Token exchange error: %v", err)
 	}
 
-	return &oauth.Token{
+	return &oauth2.Token{
 		AccessToken:  result.Access,
 		RefreshToken: result.Refresh,
 		Expiry:       time.Now().Add(result.ExpiresIn),
@@ -191,7 +190,7 @@ func main() {
 			os.Exit(1)
 		}
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.Header.Set("Authorization", "Client-ID "+config.ClientId)
+		req.Header.Set("Authorization", "Client-ID "+config.ClientID)
 
 		res, err = http.DefaultClient.Do(req)
 		if err != nil {
