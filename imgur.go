@@ -61,6 +61,7 @@ func tokenFromFile(file string) (*oauth2.Token, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
 	t := new(oauth2.Token)
 	err = gob.NewDecoder(f).Decode(t)
 	return t, err
