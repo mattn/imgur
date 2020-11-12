@@ -172,16 +172,20 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	var b []byte
+	var err error
+
 	if flag.NArg() == 0 {
-		flag.Usage()
+		b, err = ioutil.ReadAll(os.Stdin)
+	} else {
+		b, err = ioutil.ReadFile(flag.Arg(0))
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "read:", err.Error())
 		os.Exit(1)
 	}
 
-	b, err := ioutil.ReadFile(flag.Arg(0))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "open:", err.Error())
-		os.Exit(1)
-	}
 	params := url.Values{"image": {base64.StdEncoding.EncodeToString(b)}}
 
 	var res *http.Response
